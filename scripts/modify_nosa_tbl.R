@@ -14,16 +14,15 @@ rm(list = ls())
 library(DBI)
 library(odbc)
 library(tidyverse)
-library(here)
 library(readxl)
 library(sf)
 
 # location of NPT Coordinated Assessments database
-path_to_db = here("data/StreamNet API interface DES version 2024.1 - NPT.accdb")
+path_to_db = "data/StreamNet API interface DES version 2024.1 - NPT.accdb"
 
 # connect to database, load NOSA table, and disconnect
 if(!is.null(path_to_db)) {
-  source(here("R/connectNPTCAdbase.R"))
+  source("R/connectNPTCAdbase.R")
   con = connectNPTCAdbase(path_to_db)
   nosa_tbl = DBI::dbReadTable(con, "NOSA-RK")
   npt_dbo_nosa_tbl = DBI::dbReadTable(con, "dbo_NOSA")
@@ -61,14 +60,16 @@ pop_esc_df = list.files("C:/Git/SnakeRiverFishStatus/output/syntheses",
                     pattern = "(Chinook|Steelhead).*\\.xlsx$",
                     full.names = TRUE) %>%
   discard(~ grepl("~\\$", basename(.x))) %>%  # exclude temp/lock files, if an issue
-  map_dfr(~ read_excel(.x, sheet = "Pop_Tot_Esc"))
+  map_dfr(~ read_excel(.x, sheet = "Pop_Tot_Esc")) %>%
+  filter(!spawn_yr == 2025)
 
 # read in site escapement estimates
 site_esc_df = list.files("C:/Git/SnakeRiverFishStatus/output/syntheses",
                         pattern = "(Chinook|Steelhead).*\\.xlsx$",
                         full.names = TRUE) %>%
   discard(~ grepl("~\\$", basename(.x))) %>%  # exclude temp/lock files, if an issue
-  map_dfr(~ read_excel(.x, sheet = "Site_Esc"))
+  map_dfr(~ read_excel(.x, sheet = "Site_Esc")) %>%
+  filter(!spawn_yr == 2025)
 
 # prep pop_esc_df to export in same format as nosa_tbl
 pop_esc_to_nosa = pop_esc_df %>%
@@ -76,13 +77,13 @@ pop_esc_to_nosa = pop_esc_df %>%
   filter(popid != "CRSFC-s") %>%
   mutate(
     popid = if_else(popid == "CRLMA-s/CRSFC-s", "CRSFC-s", popid),
-    p_qrf_hab = if_else(popid == "CRSFC-s", 1, p_qrf_hab)
+    p_qrf = if_else(popid == "CRSFC-s", 1, p_qrf)
   ) %>%
   # SCUMA
   filter(popid != "SCUMA") %>%
   mutate(
     popid = if_else(popid == "SCLAW/SCUMA", "SCUMA", popid),
-    p_qrf_hab = if_else(popid == "SCUMA", 1, p_qrf_hab)
+    p_qrf = if_else(popid == "SCUMA", 1, p_qrf)
   ) %>%
   # remove some estimates that cover multiple pops
   filter(!popid %in% c("GRCAT/GRUMA", "GRLOS/GRMIN", "IRMAI/IRBSH", "SEUMA/SEMEA/SEMOO", "SFMAI-s/SFSEC-s", "SFSMA/SFSEC/SFEFS",
@@ -106,7 +107,7 @@ pop_esc_to_nosa = pop_esc_df %>%
         species == "Chinook"   & pop_sites == "PAHH" ~ "SRPAH",
         species == "Steelhead" & pop_sites == "PAHH" ~ "SRPAH-s"
       )) %>%
-      mutate(p_qrf_hab = case_when(
+      mutate(p_qrf = case_when(
         species == "Chinook"   & pop_sites == "RAPH" ~ 0.26,
         species == "Chinook"   & pop_sites == "PAHH" ~ 0.32,
         species == "Steelhead" & pop_sites == "PAHH" ~ 0.99
@@ -140,10 +141,10 @@ pop_esc_to_nosa = pop_esc_df %>%
          NOSAIJLowerLimit = lower95ci,
          NOSAIJUpperLimit = upper95ci) %>%
   # add PopFit info
-  mutate(PopFit = if_else(p_qrf_hab >= 0.9, "Same", "Portion"),
-         PopFitNotes = paste0(round(p_qrf_hab * 100, 1), "; Estimate reflects escapement to PTAGIS sites: ", pop_sites,". Percent pop coverage estimated using redd QRF (See et al. 2021) dataset. PopFit 'Same' if >= 90.0."),
+  mutate(PopFit = if_else(p_qrf >= 0.9, "Same", "Portion"),
+         PopFitNotes = paste0(round(p_qrf * 100, 1), "; Estimate reflects escapement to PTAGIS sites: ", pop_sites,". Percent pop coverage estimated using redd QRF (See et al. 2021) dataset. PopFit 'Same' if >= 90.0."),
          Comments = notes) %>%
-  select(-pop_sites, -p_qrf_hab, -notes) %>%
+  select(-pop_sites, -p_qrf, -notes) %>%
   # add non-overlapping columns from nosa_tbl (safe method)
   {
     join_keys <- c("CommonName", "CommonPopName", "SpawningYear")
