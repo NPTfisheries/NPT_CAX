@@ -2,15 +2,18 @@
 # Author(s): Mike Ackerman
 # Purpose: Prepare latest SnakeRiverFishStatus natural-origin spawner abundance (NOSA) estimates for upload to Coordinated Assessments (CAX) database. 
 #   The goal is to replace all past NOSA estimates uploaded by NPT with the latest and provide them in a standardized manner that makes clear
-#   IPTDS-based estimates to populations versus expanded estimates (accounting for unmonitored habitat).#   
+#   IPTDS-based escapement estimates versus expanded spawner abundance estimates (accounting for unmonitored habitat). 
 # 
 # Created Date: January 23, 2026
-#   Last Modified: January 27, 2026
+#   Last Modified: February 4, 2026
 #
 # Notes:
 
 # clear environment
 rm(list = ls())
+
+# install rCAX, if needed
+# remotes:::install_github("nwfsc-cb/rCAX@*release")
 
 # load libraries
 library(tidyverse)
@@ -18,6 +21,7 @@ library(readxl)
 library(PITcleanr)
 library(sf)
 library(writexl)
+library(rCAX)
 
 # read in population escapement estimates
 pop_esc_df = list.files("data/SRFS",
@@ -48,31 +52,51 @@ site_ll = queryInterrogationMeta() %>%
     EscapementLat  = st_coordinates(.)[, 2]
   )
 
-# location of local NPT CAX database
-path_to_db = "data/StreamNet API interface DES version 2024.1 - NPT.accdb"
-
-# connect to database, load necessary table(s), and disconnect
-if(!is.null(path_to_db)) {
-  source("R/connectNPTCAdbase.R")
-  con = connectNPTCAdbase(path_to_db)
-  pop_df = DBI::dbReadTable(con, "Populations")
-  DBI::dbDisconnect(con)
-}
+# load "Populations" table from CAX
+pop_df = rcax_table_query(tablename = "Populations")
 
 # clean up pop_df
 sr_pop_df = pop_df %>%
-  filter(str_detect(ESU_DPS, "Snake River"),
-         str_detect(CommonName, "Chinook|Steelhead"),
-         !is.na(TRT_POP_ID),
-         !PopStatus == "Extirpated") %>%
-  select(CommonName,
-         TRT_POP_ID,
-         Run,
-         ESU_DPS,
-         MajorPopGroup,
-         PopID,
-         RecoveryDomain) %>%
-  arrange(CommonName, MajorPopGroup, TRT_POP_ID)
+  filter(str_detect(esu_dps, "Snake River"),
+         str_detect(commonname, "Chinook|Steelhead"),
+         !is.na(trt_pop_id),
+         trt_pop_id != "",
+         !popstatus == "Extirpated") %>%
+  select(commonname,
+         trt_pop_id,
+         run,
+         esu_dps,
+         majorpopgroup,
+         nmfs_popid,
+         nmfs_population,
+         recoverydomain) %>%
+  arrange(commonname, majorpopgroup, trt_pop_id)
+
+# location of local NPT CAX database
+# path_to_db = "data/StreamNet API interface DES version 2024.1 - NPT.accdb"
+
+# connect to database, load necessary table(s), and disconnect
+# if(!is.null(path_to_db)) {
+#   source("R/connectNPTCAdbase.R")
+#   con = connectNPTCAdbase(path_to_db)
+#   pop_df = DBI::dbReadTable(con, "Populations")
+#   DBI::dbDisconnect(con)
+# }
+
+# clean up pop_df
+# sr_pop_df = pop_df %>%
+#   filter(str_detect(ESU_DPS, "Snake River"),
+#          str_detect(CommonName, "Chinook|Steelhead"),
+#          !is.na(TRT_POP_ID),
+#          !PopStatus == "Extirpated") %>%
+#   select(CommonName,
+#          TRT_POP_ID,
+#          Run,
+#          ESU_DPS,
+#          MajorPopGroup,
+#          PopID,
+#          RecoveryDomain) %>%
+#   arrange(CommonName, MajorPopGroup, TRT_POP_ID)
 
 # the threshhold on which to consider a pop fully monitored by IPTDS 
 threshhold = 0.99
@@ -120,7 +144,7 @@ srfs_to_cax_df = pop_esc_df %>%
   #       species == "Steelhead" & pop_sites == "PAHH" ~ 0.99
   #     ))
   # ) %>%
-  # recode SFSMA to SFMAI; i'd argue CAX is using wrong popid that doesn't match ICTRT
+  # recode SFSMA to SFMAI
   mutate(popid = if_else(popid == "SFSMA", "SFMAI", popid)) %>%
   # attach population metadata from sr_pop_df
   mutate(species = recode(species, "Chinook" = "Chinook salmon")) %>%
