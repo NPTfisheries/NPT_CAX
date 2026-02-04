@@ -12,16 +12,15 @@
 # clear environment
 rm(list = ls())
 
-# install rCAX, if needed
-# remotes:::install_github("nwfsc-cb/rCAX@*release")
-
 # load libraries
 library(tidyverse)
 library(readxl)
 library(PITcleanr)
 library(sf)
 library(writexl)
-library(rCAX)
+
+#---------------------------------------
+# read in data from SnakeRiverFishStatus
 
 # read in population escapement estimates
 pop_esc_df = list.files("data/SRFS",
@@ -36,6 +35,9 @@ site_esc_df = list.files("data/SRFS",
                          full.names = TRUE) %>%
   discard(~ grepl("~\\$", basename(.x))) %>%  # exclude temp/lock files, if an issue
   map_dfr(~ read_excel(.x, sheet = "Site_Esc"))
+
+#----------------------------------------
+# retrieve locations for PTAGIS INT sites
 
 # get lat/lons for sites
 site_ll = queryInterrogationMeta() %>%
@@ -52,8 +54,26 @@ site_ll = queryInterrogationMeta() %>%
     EscapementLat  = st_coordinates(.)[, 2]
   )
 
-# load "Populations" table from CAX
+#----------------------------------
+# retrieve data from CAX using rCAX
+
+# install rCAX, if needed
+# remotes:::install_github("nwfsc-cb/rCAX@*release")
+library(rCAX)
+
+# load Populations table from CAX
 pop_df = rcax_table_query(tablename = "Populations")
+
+# retrieve metadata for NOSA fields
+cax_nosa_meta = rcax_hli("NOSA", type = "colnames")
+
+# retrieve NOSA table
+nosa_df = rcax_hli("NOSA", 
+                   qlist = list(limit = 10000)) # by default, rcax_hli() only retrieves 1000 records
+
+npt_nosa_df = nosa_df %>%
+  filter(submitagency == "NPT")
+
 
 # clean up pop_df
 sr_pop_df = pop_df %>%
@@ -72,31 +92,7 @@ sr_pop_df = pop_df %>%
          recoverydomain) %>%
   arrange(commonname, majorpopgroup, trt_pop_id)
 
-# location of local NPT CAX database
-# path_to_db = "data/StreamNet API interface DES version 2024.1 - NPT.accdb"
 
-# connect to database, load necessary table(s), and disconnect
-# if(!is.null(path_to_db)) {
-#   source("R/connectNPTCAdbase.R")
-#   con = connectNPTCAdbase(path_to_db)
-#   pop_df = DBI::dbReadTable(con, "Populations")
-#   DBI::dbDisconnect(con)
-# }
-
-# clean up pop_df
-# sr_pop_df = pop_df %>%
-#   filter(str_detect(ESU_DPS, "Snake River"),
-#          str_detect(CommonName, "Chinook|Steelhead"),
-#          !is.na(TRT_POP_ID),
-#          !PopStatus == "Extirpated") %>%
-#   select(CommonName,
-#          TRT_POP_ID,
-#          Run,
-#          ESU_DPS,
-#          MajorPopGroup,
-#          PopID,
-#          RecoveryDomain) %>%
-#   arrange(CommonName, MajorPopGroup, TRT_POP_ID)
 
 # the threshhold on which to consider a pop fully monitored by IPTDS 
 threshhold = 0.99
