@@ -15,7 +15,7 @@ remotes:::install_github("nwfsc-cb/rCAX@*release")
 
 # load libraries
 library(rCAX)
-library(tidyvserse)
+library(tidyverse)
 
 # rCAX package information
 rcax_termsofuse()          # terms of use

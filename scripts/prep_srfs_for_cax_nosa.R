@@ -55,29 +55,32 @@ site_ll = queryInterrogationMeta() %>%
   )
 
 #----------------------------------
-# retrieve data from CAX using rCAX
+# retrieve data from CAX
 
 # install rCAX, if needed
 # remotes:::install_github("nwfsc-cb/rCAX@*release")
 library(rCAX)
 
-# load Populations table from CAX
-pop_df = rcax_table_query(tablename = "Populations")
+cax_key = Sys.getenv("CAX_KEY")
 
 # retrieve metadata for NOSA fields
 cax_nosa_meta = rcax_hli("NOSA", type = "colnames")
+cax_nosa_meta = rcax_hli("NOSA", type = "colnames", key = cax_key)
+cax_nosa_meta = rcax_hli("NOSA", type = "colnames", GETargs = list(key = cax_key))
 
-# retrieve NOSA table
-nosa_df = rcax_hli("NOSA", 
-                   qlist = list(limit = 10000)) # by default, rcax_hli() only retrieves 1000 records
 
-npt_nosa_df = nosa_df %>%
+# retrieve NOSA table, up to 10,000 records (by default, only retrieves 1,000)
+cax_nosa = rcax_hli("NOSA", qlist = list(limit = 10000))
+
+npt_cax_nosa = cax_nosa_df %>%
   filter(submitagency == "NPT")
 
+# load populations table from CAX
+pop_df = rcax_table_query(tablename = "Populations")
 
 # clean up pop_df
 sr_pop_df = pop_df %>%
-  filter(str_detect(esu_dps, "Snake River"),
+  filter(str_detect(esudps, "Snake River"),
          str_detect(commonname, "Chinook|Steelhead"),
          !is.na(trt_pop_id),
          trt_pop_id != "",
@@ -85,20 +88,21 @@ sr_pop_df = pop_df %>%
   select(commonname,
          trt_pop_id,
          run,
-         esu_dps,
+         esudps,
          majorpopgroup,
          nmfs_popid,
          nmfs_population,
          recoverydomain) %>%
   arrange(commonname, majorpopgroup, trt_pop_id)
 
-
+#----------------------------------------------------------------
+# prep SnakeRiverFishStatus results to compare and upload to NOSA
 
 # the threshhold on which to consider a pop fully monitored by IPTDS 
 threshhold = 0.99
 
 # prep SnakeRiverFishStatus results for CAX NOSA table
-srfs_to_cax_df = pop_esc_df %>%
+srfs_to_cax = pop_esc_df %>%
   # trim out unneeded columns
   select(-incl_sites, -mean, -mode, -sd, -cv, -p_qrf_se) %>%
   # CRSFC-s & SCUMA: use estimates from SC1 as it provides the longer time-series; SC3 didn't operated until spawn year 2022
@@ -140,11 +144,9 @@ srfs_to_cax_df = pop_esc_df %>%
   #       species == "Steelhead" & pop_sites == "PAHH" ~ 0.99
   #     ))
   # ) %>%
-  # recode SFSMA to SFMAI
-  mutate(popid = if_else(popid == "SFSMA", "SFMAI", popid)) %>%
   # attach population metadata from sr_pop_df
   mutate(species = recode(species, "Chinook" = "Chinook salmon")) %>%
-  left_join(sr_pop_df, by = c("species" = "CommonName", "popid" = "TRT_POP_ID")) %>%
+  left_join(sr_pop_df, by = c("species" = "commonname", "popid" = "trt_pop_id")) %>%
   # add lat/lon based on the first site in pop_sites
   mutate(site_code = str_extract(pop_sites, "^[^,]+")) %>%
   left_join(site_ll %>% st_drop_geometry(), by = "site_code") %>%
