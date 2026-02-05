@@ -20,21 +20,20 @@ library(sf)
 library(writexl)
 
 #---------------------------------------
-# read in data from SnakeRiverFishStatus
+# path to SnakeRiverFishStatus files
+srfs_results_files = list.files("data/SRFS",
+                                pattern = "(Chinook|Steelhead).*\\.xlsx$",
+                                full.names = TRUE) %>%
+  discard(~ grepl("~\\$", basename(.x)))
+  
+# population escapement estimates
+pop_esc_df = map_dfr(srfs_results_files, ~ read_excel(.x, sheet = "Pop_Tot_Esc"))
 
-# read in population escapement estimates
-pop_esc_df = list.files("data/SRFS",
-                        pattern = "(Chinook|Steelhead).*\\.xlsx$",
-                        full.names = TRUE) %>%
-  discard(~ grepl("~\\$", basename(.x))) %>%  # exclude temp/lock files, if an issue
-  map_dfr(~ read_excel(.x, sheet = "Pop_Tot_Esc"))
+# population age proportions
+age_p_df = map_dfr(srfs_results_files, ~ read_excel(.x, sheet = "Pop_Age_Props"))
 
-# read in site escapement estimates
-# site_esc_df = list.files("data/SRFS",
-#                          pattern = "(Chinook|Steelhead).*\\.xlsx$",
-#                          full.names = TRUE) %>%
-#   discard(~ grepl("~\\$", basename(.x))) %>%  # exclude temp/lock files, if an issue
-#   map_dfr(~ read_excel(.x, sheet = "Site_Esc"))
+# site escapements
+site_esc_df = map_dfr(srfs_results_files, ~ read_excel(.x, sheet = "Site_Esc"))
 
 #----------------------------------------
 # retrieve locations for PTAGIS INT sites
@@ -90,7 +89,7 @@ sr_pop_df = pop_df %>%
          MajorPopGroup   = majorpopgroup,
          PopID           = id,           
          NMFS_POPID      = nmfs_popid,
-         #LocationName    = locationname,   # same as nmfs_population
+         LocationName    = locationname,   # same as nmfs_population
          PopulationName  = populationname,
          ESApopName      = esapopname,
          ESU_DPS         = esudps,
@@ -270,7 +269,12 @@ srfs_to_cax = pop_esc_df %>%
          ContactPhone       = "208-634-5290",
          ContactEmail       = "mikea@nezperce.org",
          ContactAgency      = "Nez Perce Tribe",
+         ContactAgy         = "NPT",
          SubmitAgency       = "NPT",
+         HLI                = "NOSA",
+         NullRecord         = "No",
+         DataStatus         = "Draft",
+         OtherDataSources   = "IDFG, ODFW, WDFW, Biomark, QCI, SBT, CTUIR",
          Publish            = "Yes")
 
 # write to excel, if needed
