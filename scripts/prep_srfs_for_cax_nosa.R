@@ -5,7 +5,7 @@
 #   IPTDS-based escapement estimates versus expanded spawner abundance estimates (accounting for unmonitored habitat). 
 # 
 # Created Date: January 23, 2026
-#   Last Modified: February 4, 2026
+#   Last Modified: February 5, 2026
 #
 # Notes:
 
@@ -30,11 +30,11 @@ pop_esc_df = list.files("data/SRFS",
   map_dfr(~ read_excel(.x, sheet = "Pop_Tot_Esc"))
 
 # read in site escapement estimates
-site_esc_df = list.files("data/SRFS",
-                         pattern = "(Chinook|Steelhead).*\\.xlsx$",
-                         full.names = TRUE) %>%
-  discard(~ grepl("~\\$", basename(.x))) %>%  # exclude temp/lock files, if an issue
-  map_dfr(~ read_excel(.x, sheet = "Site_Esc"))
+# site_esc_df = list.files("data/SRFS",
+#                          pattern = "(Chinook|Steelhead).*\\.xlsx$",
+#                          full.names = TRUE) %>%
+#   discard(~ grepl("~\\$", basename(.x))) %>%  # exclude temp/lock files, if an issue
+#   map_dfr(~ read_excel(.x, sheet = "Site_Esc"))
 
 #----------------------------------------
 # retrieve locations for PTAGIS INT sites
@@ -61,18 +61,16 @@ site_ll = queryInterrogationMeta() %>%
 # remotes:::install_github("nwfsc-cb/rCAX@*release")
 library(rCAX)
 
-cax_key = Sys.getenv("CAX_KEY")
+# retrieve key, if needed
+#cax_key = Sys.getenv("CAX_KEY")
 
 # retrieve metadata for NOSA fields
 cax_nosa_meta = rcax_hli("NOSA", type = "colnames")
-cax_nosa_meta = rcax_hli("NOSA", type = "colnames", key = cax_key)
-cax_nosa_meta = rcax_hli("NOSA", type = "colnames", GETargs = list(key = cax_key))
-
 
 # retrieve NOSA table, up to 10,000 records (by default, only retrieves 1,000)
 cax_nosa = rcax_hli("NOSA", qlist = list(limit = 10000))
 
-npt_cax_nosa = cax_nosa_df %>%
+npt_cax_nosa = cax_nosa %>%
   filter(submitagency == "NPT")
 
 # load populations table from CAX
@@ -85,193 +83,198 @@ sr_pop_df = pop_df %>%
          !is.na(trt_pop_id),
          trt_pop_id != "",
          !popstatus == "Extirpated") %>%
-  select(commonname,
-         trt_pop_id,
-         run,
-         esudps,
-         majorpopgroup,
-         nmfs_popid,
-         nmfs_population,
-         recoverydomain) %>%
-  arrange(commonname, majorpopgroup, trt_pop_id)
+  select(CommonName      = commonname,
+         CommonPopName   = trt_pop_id,
+         Run             = run,
+         RecoveryDomain  = recoverydomain,
+         MajorPopGroup   = majorpopgroup,
+         PopID           = id,           
+         NMFS_POPID      = nmfs_popid,
+         #LocationName    = locationname,   # same as nmfs_population
+         PopulationName  = populationname,
+         ESApopName      = esapopname,
+         ESU_DPS         = esudps,
+         NMFS_Population = nmfs_population) %>%
+  arrange(CommonName, MajorPopGroup, CommonPopName)
 
 #----------------------------------------------------------------
 # prep SnakeRiverFishStatus results to compare and upload to NOSA
 
-# the threshhold on which to consider a pop fully monitored by IPTDS 
-threshhold = 0.99
+# the threshhold on which to consider a pop fully monitored by IPTDS, what do we want to set this at? 
+threshhold = 0.90
 
 # prep SnakeRiverFishStatus results for CAX NOSA table
 srfs_to_cax = pop_esc_df %>%
-  # trim out unneeded columns
-  select(-incl_sites, -mean, -mode, -sd, -cv, -p_qrf_se) %>%
+  # rename some columns to match CAX
+  rename(CommonName    = species,
+         SpawningYear  = spawn_yr,
+         CommonPopName = popid,
+         Comments      = notes) %>%
+  # trim unused columns
+  select(-mpg, -incl_sites, -n_tags, -mean, -mode, -sd, -cv, -p_qrf_se) %>%
   # CRSFC-s & SCUMA: use estimates from SC1 as it provides the longer time-series; SC3 didn't operated until spawn year 2022
-  filter(!popid %in% c("CRSFC-s", "SCUMA")) %>%
+  filter(!CommonPopName %in% c("CRSFC-s", "SCUMA")) %>%
   mutate(
-    popid = case_when(
-      popid == "CRLMA-s/CRSFC-s" ~ "CRSFC-s",
-      popid == "SCLAW/SCUMA"     ~ "SCUMA",
-      TRUE                      ~ popid
+    CommonPopName = case_when(
+      CommonPopName == "CRLMA-s/CRSFC-s" ~ "CRSFC-s",
+      CommonPopName == "SCLAW/SCUMA"     ~ "SCUMA",
+      TRUE                               ~ CommonPopName
     ),
     # for CRSFC-s & SCUMA, set p_qrf to 1 and use un-expanded estimates
-    p_qrf         = if_else(popid %in% c("CRSFC-s", "SCUMA"), 1, p_qrf),
-    median_exp    = if_else(popid %in% c("CRSFC-s", "SCUMA"), median,    median_exp),
-    lower95ci_exp = if_else(popid %in% c("CRSFC-s", "SCUMA"), lower95ci, lower95ci_exp),
-    upper95ci_exp = if_else(popid %in% c("CRSFC-s", "SCUMA"), upper95ci, upper95ci_exp)
+    p_qrf         = if_else(CommonPopName %in% c("CRSFC-s", "SCUMA"), 1, p_qrf),
+    median_exp    = if_else(CommonPopName %in% c("CRSFC-s", "SCUMA"), median,    median_exp),
+    lower95ci_exp = if_else(CommonPopName %in% c("CRSFC-s", "SCUMA"), lower95ci, lower95ci_exp),
+    upper95ci_exp = if_else(CommonPopName %in% c("CRSFC-s", "SCUMA"), upper95ci, upper95ci_exp)
   ) %>%
   # toss out Tucannon estimates & estimates for multiple populations
-  filter(!str_detect(popid, "/"),
-         !str_detect(popid, "SNTUC")) %>%
+  filter(!str_detect(CommonPopName, "/"),                            ### we could submit these as PopFit = Multiple, which would require additional work
+         !str_detect(CommonPopName, "SNTUC")) %>%
   # do we want to try to add estimates from RAPH and PAHH? if so, these would need to be QC'd
   # bind_rows(
   #   site_esc_df %>%
   #     filter(site %in% c("PAHH", "RAPH") & !(species == "Steelhead" & site == "RAPH")) %>%
   #     select(-site_operational) %>%
-  #     rename(pop_sites = site) %>%
+  #     rename(pop_sites = site, CommonName = species) %>%
   #     mutate(mpg = case_when(
-  #       species == "Chinook"   & pop_sites == "RAPH" ~ "South Fork Salmon River",
-  #       species == "Chinook"   & pop_sites == "PAHH" ~ "Upper Salmon River",
-  #       species == "Steelhead" & pop_sites == "PAHH" ~ "Salmon River"
+  #       CommonName == "Chinook"   & pop_sites == "RAPH" ~ "South Fork Salmon River",
+  #       CommonName == "Chinook"   & pop_sites == "PAHH" ~ "Upper Salmon River",
+  #       CommonName == "Steelhead" & pop_sites == "PAHH" ~ "Salmon River"
   #     )) %>%
-  #     mutate(popid = case_when(
-  #       species == "Chinook"   & pop_sites == "RAPH" ~ "SRLSR",
-  #       species == "Chinook"   & pop_sites == "PAHH" ~ "SRPAH",
-  #       species == "Steelhead" & pop_sites == "PAHH" ~ "SRPAH-s"
+  #     mutate(CommonPopName = case_when(
+  #       CommonName == "Chinook"   & pop_sites == "RAPH" ~ "SRLSR",
+  #       CommonName == "Chinook"   & pop_sites == "PAHH" ~ "SRPAH",
+  #       CommonName == "Steelhead" & pop_sites == "PAHH" ~ "SRPAH-s"
   #     )) %>%
   #     mutate(p_qrf = case_when(
-  #       species == "Chinook"   & pop_sites == "RAPH" ~ 0.26,
-  #       species == "Chinook"   & pop_sites == "PAHH" ~ 0.32,
-  #       species == "Steelhead" & pop_sites == "PAHH" ~ 0.99
+  #       CommonName == "Chinook"   & pop_sites == "RAPH" ~ 0.26,
+  #       CommonName == "Chinook"   & pop_sites == "PAHH" ~ 0.32,
+  #       CommonName == "Steelhead" & pop_sites == "PAHH" ~ 0.99
   #     ))
   # ) %>%
   # attach population metadata from sr_pop_df
-  mutate(species = recode(species, "Chinook" = "Chinook salmon")) %>%
-  left_join(sr_pop_df, by = c("species" = "commonname", "popid" = "trt_pop_id")) %>%
+  mutate(CommonName = recode(CommonName, "Chinook" = "Chinook Salmon")) %>%
+  left_join(sr_pop_df, by = c("CommonName", "CommonPopName")) %>%
   # add lat/lon based on the first site in pop_sites
   mutate(site_code = str_extract(pop_sites, "^[^,]+")) %>%
   left_join(site_ll %>% st_drop_geometry(), by = "site_code") %>%
   select(-site_code) %>%
-  # split IPTDS-based vs habitat-expanded records
-  mutate(
-    PopFit = if_else(p_qrf >= threshhold, "Same", "Portion"),
-    MetaComments = case_when(
-      p_qrf >= threshhold                       ~ "STADEM and DABOM",
-      p_qrf <  threshhold & PopFit == "Portion" ~ "STADEM and DABOM",
-      p_qrf <  threshhold & PopFit == "Same"    ~ "STADEM, DABOM, and QRF"
-    )
-  ) %>%
-  # add expanded estimates as new records
+  # set PopFit for median, lower95ci, and upper95ci based on proportion of habitat monitored; expanded ests will be added below
+  mutate(PopFit = if_else(p_qrf >= threshhold, "Same", "Portion"),
+         MetaComments = "STADEM and DABOM") %>%
   {
-    d <- .
+    df = .
     bind_rows(
-      d,
-      d %>%
-        filter(p_qrf < threshhold) %>%
-        mutate(
-          median        = median_exp,
-          lower95ci     = lower95ci_exp,
-          upper95ci     = upper95ci_exp,
-          PopFit        = "Same",
-          MetaComments  = "STADEM, DABOM, and QRF"
-        )
+      df,
+      df %>%
+        filter(p_qrf < threshhold & PopFit == "Portion") %>%
+        mutate(median       = median_exp,
+               lower95ci    = lower95ci_exp,
+               upper95ci    = upper95ci_exp,
+               PopFit       = "Same",
+               MetaComments = "STADEM, DABOM, and QRF")
     )
   } %>%
-  # round estimates
+  # expanded ests no longer needed
+  select(-contains("_exp")) %>%
+  # round estimates and rename, add alpha
   mutate(across(c(median, lower95ci, upper95ci), round)) %>%
-  distinct() %>%
-  arrange(species, popid, spawn_yr, PopFit) %>%
-  # notes and protocol fields
+  rename(NOSAIJ           = median,
+         NOSAIJLowerLimit = lower95ci,
+         NOSAIJUpperLimit = upper95ci) %>%
+  mutate(NOSAIJAlpha      = 0.05) %>%
+  # assign EstimateType: Escapement if IPTDS-based, NOSA if expanded
+  mutate(EstimateType = case_when(
+    MetaComments == "STADEM and DABOM"       ~ "Escapement",
+    MetaComments == "STADEM, DABOM, and QRF" ~ "NOSA",
+    TRUE                                     ~ NA_character_
+  )) %>%
+  # assign EscapementTiming by species
+  mutate(EscapementTiming = case_when(
+    CommonName == "Chinook Salmon" ~ "Jun-Oct",
+    CommonName == "Steelhead"      ~ "Feb-Jun",
+    TRUE                           ~ NA_character_
+  )) %>%
+  # add PopFitNotes
   mutate(
-    qrf_note = paste0("Percent pop coverage estimated using redd QRF dataset (See et al. 2021)."),
+    p_qrf       = round(p_qrf * 100, 1),
+    site_note   = paste0("Estimate reflects PTAGIS site(s): ", pop_sites, " which monitor an estimated ", p_qrf, "% of available habitat."),
+    qrf_note    = "Percent of available habitat monitored estimated using redd QRF dataset (See et al. 2021).",
     PopFitNotes = case_when(
-      p_qrf >= threshhold & PopFit == "Same"    ~ paste0("Estimate reflects PTAGIS site(s): ", pop_sites, " which monitor an estimated ", round(p_qrf * 100, 1), "% of available habitat. PopFit considered 'Same' if >= ", threshhold * 100, "%. ", qrf_note),
-      p_qrf <  threshhold & PopFit == "Portion" ~ paste0("Estimate reflects PTAGIS site(s): ", pop_sites, " which monitor an estimated ", round(p_qrf * 100, 1), "% of available habitat. PopFit considered 'Portion' because < ", threshhold * 100, "% and estimate NOT expanded to account for unmonitored habitat. ", qrf_note),
-      p_qrf <  threshhold & PopFit == "Same"    ~ paste0("Estimate reflects PTAGIS site(s): ", pop_sites, " which monitor an estimated ", round(p_qrf * 100, 1), "% of available habitat. PopFit considered 'Same' because estimate is expanded to account for unmonitored habitat. ", qrf_note),
+      MetaComments == "STADEM and DABOM"       & PopFit == "Same"    ~ paste0(site_note, "PopFit considered 'Same' because >= ", threshhold * 100, "%. ", qrf_note),
+      MetaComments == "STADEM and DABOM"       & PopFit == "Portion" ~ paste0(site_note, "PopFit considered 'Portion' because < ", threshhold * 100, "%. ", qrf_note),
+      MetaComments == "STADEM, DABOM, and QRF" & PopFit == "Same"    ~ paste0(site_note, "PopFit considered 'Same' because 'Portion' escapement estimate was expanded to account for unmonitored habitat."),
       TRUE ~ NA_character_
-    ),
+    )
+  ) %>%
+  select(-p_qrf, -site_note, -qrf_note) %>%
+  # add protocol fields
+  mutate(
     ProtMethName = case_when(
-      (p_qrf >= threshhold & PopFit == "Same") | (p_qrf < threshhold & PopFit == "Portion") ~ "PIT tag Based Escapement Estimation Above Lower Granite Dam v1.0",
-      (p_qrf <  threshhold & PopFit == "Same")                                              ~ "DRAFT",
+      MetaComments == "STADEM and DABOM"       ~ "PIT tag Based Escapement Estimation Above Lower Granite Dam v1.0",
+      MetaComments == "STADEM, DABOM, and QRF" ~ "Ackerman et al. (In Prep)",
       TRUE ~ NA_character_
     ),
     ProtMethURL = case_when(
-      (p_qrf >= threshhold & PopFit == "Same") | (p_qrf < threshhold & PopFit == "Portion") ~ "https://www.monitoringresources.org/Document/Protocol/Details/2187",
-      (p_qrf <  threshhold & PopFit == "Same")                                              ~ "DRAFT",
+      MetaComments == "STADEM and DABOM"       ~ "https://www.monitoringresources.org/Document/Protocol/Details/2187",
+      MetaComments == "STADEM, DABOM, and QRF" ~ "https://github.com/NPTfisheries/SnakeRiverPopAbundPaper",
       TRUE ~ NA_character_
-  )) %>%
-  select(-qrf_note) %>%
+    )
+  ) %>%
   # assign WaterBody based on pop_sites
   mutate(WaterBody = case_when(
-    MetaComments == "STADEM and DABOM" & pop_sites %in% c("ACB", "ACM")                               ~ "Asotin Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "BRC"                                           ~ "Bear Valley Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "TAY"                                           ~ "Big Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites %in% c("BBA", "KHS")                               ~ "Big Bear Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites %in% c("BSC", "BSC, CMP")                          ~ "Big Sheep Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "CCW"                                           ~ "Catherine Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "CLC"                                           ~ "Clear Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites %in% c("BED, CLC, LAP", "BED, EPR, LAP, LAW",
-                                                          "CLC, HLM, KHS, LAP", "CLC, KHS, LAP, PCM") ~ "Clearwater River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "ESS"                                           ~ "East Fork South Fork Salmon River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "UGR"                                           ~ "Grande Ronde River",
-    MetaComments == "STADEM and DABOM" & pop_sites %in% c("COC, IR1", "IR3")                          ~ "Imnaha River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "JOC"                                           ~ "Joseph Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "LAP"                                           ~ "Lapwai Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "LAP"                                           ~ "Lemhi River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "LRL"                                           ~ "Lochsa River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "LC1"                                           ~ "Lolo Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "LGW"                                           ~ "Lookingglass Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "MAR"                                           ~ "Marsh Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "MR1"                                           ~ "Minam River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "MIS"                                           ~ "Mission Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "NFS"                                           ~ "North Fork Salmon River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "PCA"                                           ~ "Panther Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites %in% c("HLM", "JUL", "KHS, PCM")                   ~ "Potlatch River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "ZEN"                                           ~ "Secesh River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "SW1"                                           ~ "Selway River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "SC1"                                           ~ "South Fork Clearwater River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "KRS"                                           ~ "South Fork Salmon River",
-    MetaComments == "STADEM and DABOM" & pop_sites %in% c("MDC, UGS", "UGS")                          ~ "upper Grande Ronde River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "VC2"                                           ~ "Valley Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites %in% c("MR1, WR2", "WR1", "WR2")                   ~ "Wallowa River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "WEN"                                           ~ "Wenaha River",
-    MetaComments == "STADEM and DABOM" & pop_sites == "WB1"                                           ~ "Whitebird Creek",
-    MetaComments == "STADEM and DABOM" & pop_sites == "YFK"                                           ~ "Yankee Fork Salmon River",
-    MetaComments == "STADEM and DABOM" & pop_sites %in% c("ACM, COU", "CRC, LLR", "ESS, KRS", 
-                                                          "HLM, KHS, LAP", "HLM, MIS", "JA1, LAP",
-                                                          "JA1, SWT", "JUL, LAP", "KHS, LAP",
-                                                          "LAP, LAW, SIX", "LGW, UGR", "VC2, YFK")    ~ "Multiple",
-    MetaComments == "STADEM, DABOM, and QRF"                                                          ~ "Multiple"
+    pop_sites %in% c("ACB", "ACM")                               ~ "Asotin Creek",
+    pop_sites == "BRC"                                           ~ "Bear Valley Creek",
+    pop_sites == "TAY"                                           ~ "Big Creek",
+    pop_sites %in% c("BBA", "KHS")                               ~ "Big Bear Creek",
+    pop_sites %in% c("BSC", "BSC, CMP")                          ~ "Big Sheep Creek",
+    pop_sites == "CCW"                                           ~ "Catherine Creek",
+    pop_sites == "CLC"                                           ~ "Clear Creek",
+    pop_sites == "ESS"                                           ~ "East Fork South Fork Salmon River",
+    pop_sites == "UGR"                                           ~ "Grande Ronde River",
+    pop_sites %in% c("COC, IR1", "IR3")                          ~ "Imnaha River",
+    pop_sites == "JOC"                                           ~ "Joseph Creek",
+    pop_sites == "LAP"                                           ~ "Lapwai Creek",
+    pop_sites == "LLR"                                           ~ "Lemhi River",
+    pop_sites == "LRL"                                           ~ "Lochsa River",
+    pop_sites == "LC1"                                           ~ "Lolo Creek",
+    pop_sites == "LGW"                                           ~ "Lookingglass Creek",
+    pop_sites == "MAR"                                           ~ "Marsh Creek",
+    pop_sites == "MR1"                                           ~ "Minam River",
+    pop_sites == "MIS"                                           ~ "Mission Creek",
+    pop_sites == "NFS"                                           ~ "North Fork Salmon River",
+    pop_sites == "PCA"                                           ~ "Panther Creek",
+    pop_sites %in% c("HLM", "JUL", "KHS, PCM")                   ~ "Potlatch River",
+    pop_sites == "ZEN"                                           ~ "Secesh River",
+    pop_sites == "SW1"                                           ~ "Selway River",
+    pop_sites == "SC1"                                           ~ "South Fork Clearwater River",
+    pop_sites == "KRS"                                           ~ "South Fork Salmon River",
+    pop_sites %in% c("MDC, UGS", "UGS")                          ~ "upper Grande Ronde River",
+    pop_sites == "VC2"                                           ~ "Valley Creek",
+    pop_sites %in% c("MR1, WR2", "WR1", "WR2")                   ~ "Wallowa River",
+    pop_sites == "WEN"                                           ~ "Wenaha River",
+    pop_sites == "WB1"                                           ~ "Whitebird Creek",
+    pop_sites == "YFK"                                           ~ "Yankee Fork Salmon River",
+    pop_sites %in% c("ACM, COU", "CRC, LLR", "ESS, KRS",
+                     "BED, CLC, LAP", "BED, EPR, LAP, LAW",
+                     "CLC, HLM, KHS, LAP", "CLC, KHS, LAP, PCM", 
+                     "HLM, KHS, LAP", "HLM, MIS", "JA1, LAP",
+                     "JA1, SWT", "JUL, LAP", "KHS, LAP",
+                     "LAP, LAW, SIX", "LGW, UGR", "VC2, YFK")    ~ "Multiple",
+    TRUE ~ NA_character_
   )) %>%
-  # final shaping for CAX NOSA
-  select(-pop_sites, -n_tags, -p_qrf, -contains("_exp")) %>%
-  rename(
-    CommonName       = species,
-    SpawningYear     = spawn_yr,
-    CommonPopName    = popid,
-    NOSAIJ           = median,
-    NOSAIJLowerLimit = lower95ci,
-    NOSAIJUpperLimit = upper95ci,
-    Comments         = notes
-  ) %>%
-  mutate(
-    EstimateType = "Escapement",
-    EscapementTiming = case_when(
-      CommonName == "Chinook salmon" ~ "Jun-Oct",
-      CommonName == "Steelhead"      ~ "Feb-Jun",
-      TRUE ~ NA_character_
-    ),
-    NOSAIFAlpha = 0.05,
-    ContactPersonFirst = "Mike",
-    ContactPersonLast  = "Ackerman",
-    ContactPhone       = "208-634-5290",
-    ContactEmail       = "mikea@nezperce.org",
-    ContactAgency      = "Nez Perce Tribe",
-    SubmitAgency       = "NPT",
-    Publish            = "Yes"
-  )
+  # for expanded estimates, just set WaterBody to "Multiple"
+  mutate(WaterBody = if_else(MetaComments == "STADEM, DABOM, and QRF", "Multiple", WaterBody)) %>%
+  # additional metadata
+  mutate(ContactPersonFirst = "Mike",
+         ContactPersonLast  = "Ackerman",
+         ContactPhone       = "208-634-5290",
+         ContactEmail       = "mikea@nezperce.org",
+         ContactAgency      = "Nez Perce Tribe",
+         SubmitAgency       = "NPT",
+         Publish            = "Yes")
 
 # write to excel, if needed
-write_xlsx(srfs_to_cax_df, path = paste0("output/SnakeRiverFishStatus_Results_4_CAX_NOSA_", Sys.Date(), ".xlsx"))
+write_xlsx(srfs_to_cax, path = paste0("output/SnakeRiverFishStatus_Results_4_CAX_NOSA_", Sys.Date(), ".xlsx"))
 
 ### END SCRIPT
 
