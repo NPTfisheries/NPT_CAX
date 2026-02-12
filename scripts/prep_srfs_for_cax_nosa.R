@@ -5,7 +5,7 @@
 #   IPTDS-based escapement estimates versus expanded spawner abundance estimates (accounting for unmonitored habitat). 
 # 
 # Created Date: January 23, 2026
-#   Last Modified: February 5, 2026
+#   Last Modified: February 12, 2026
 #
 # Notes:
 
@@ -96,6 +96,33 @@ sr_pop_df = pop_df %>%
          NMFS_Population = nmfs_population) %>%
   arrange(CommonName, MajorPopGroup, CommonPopName)
 
+#-----------------------------------------------------------------
+# prep age_p_df to join to abundance results and formatted for CAX
+age_p_for_cax = age_p_df %>%
+  select(species:upper95ci) %>%
+  mutate(across(c(median, lower95ci, upper95ci), ~ round(.x, 8)),
+         param = str_remove(param, "^p_"),
+         param = str_replace(param, "age_", "Age")) %>%
+  group_by(species, spawn_yr, popid) %>%
+  pivot_longer(
+    cols = c(median, lower95ci, upper95ci),
+    names_to = "stat",
+    values_to = "value"
+  ) %>%
+  mutate(
+    stat = recode(stat,
+                  median    = "Prop",
+                  lower95ci = "PropLowerLimit",
+                  upper95ci = "PropUpperLimit")
+  ) %>%
+  pivot_wider(
+    names_from = c(param, stat),
+    values_from = value,
+    names_glue = "{param}{stat}"
+  ) %>%
+  ungroup()
+  
+
 #----------------------------------------------------------------
 # prep SnakeRiverFishStatus results to compare and upload to NOSA
 
@@ -104,6 +131,8 @@ threshhold = 0.90
 
 # prep SnakeRiverFishStatus results for CAX NOSA table
 srfs_to_cax = pop_esc_df %>%
+  # join prepped age proportions
+  left_join(age_p_for_cax, by = c("species", "spawn_yr", "popid")) %>%
   # rename some columns to match CAX
   rename(CommonName    = species,
          SpawningYear  = spawn_yr,
@@ -217,7 +246,11 @@ srfs_to_cax = pop_esc_df %>%
       MetaComments == "STADEM and DABOM"       ~ "https://www.monitoringresources.org/Document/Protocol/Details/2187",
       MetaComments == "STADEM, DABOM, and QRF" ~ "https://github.com/NPTfisheries/SnakeRiverPopAbundPaper",
       TRUE ~ NA_character_
-    )
+    ),
+    ProtMethDocumentation = paste0("See, K.E., R.N. Kinzer, and M.W. Ackerman. 2021. State-Space Model to Estimate Salmon Escapement Using Multiple Data Sources. North American Journal of Fisheries Management. DOI: 10.1002/nafm.10649; ",
+                                   "Waterhouse, L., J. White, K. See, A. Murdoch, and B.X. Semmens. 2020. A Bayesian Nested Patch Occupancy Model to Estimate Steelhead Movement and Abundance. Ecological Applications 00(00):e02202. 10.1002/eap.2202; ",
+                                   "Kinzer, R., R. Orme, M. Campbell, J. Hargrove, and K. See. 2020. Report to NOAA Fisheries for 5-year ESA Status Review: Snake River Basin Steelhead and Chinook Salmon Population Abundance, Life History, and Diversity Metrics Calculated from In-Stream PIT-Tag Observations (SY2010-SY2019). In-stream PIT-tag Detection Systems Workgroup. 118 pp.; ",
+                                   "Ackerman et al. (In Prep).")
   ) %>%
   # assign WaterBody based on pop_sites
   mutate(WaterBody = case_when(
