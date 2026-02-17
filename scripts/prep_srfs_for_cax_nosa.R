@@ -5,7 +5,7 @@
 #   IPTDS-based escapement estimates versus expanded spawner abundance estimates (accounting for unmonitored habitat). 
 # 
 # Created Date: January 23, 2026
-#   Last Modified: February 12, 2026
+#   Last Modified: February 17, 2026
 #
 # Notes:
 
@@ -20,7 +20,7 @@ library(sf)
 library(writexl)
 
 #---------------------------------------
-# path to SnakeRiverFishStatus files
+# read in SnakeRiverFishStatus results
 srfs_results_files = list.files("data/SRFS",
                                 pattern = "(Chinook|Steelhead).*\\.xlsx$",
                                 full.names = TRUE) %>%
@@ -37,8 +37,6 @@ site_esc_df = map_dfr(srfs_results_files, ~ read_excel(.x, sheet = "Site_Esc"))
 
 #----------------------------------------
 # retrieve locations for PTAGIS INT sites
-
-# get lat/lons for sites
 site_ll = queryInterrogationMeta() %>%
   select(site_code = siteCode, latitude, longitude) %>%
   bind_rows(queryMRRMeta() %>%
@@ -71,6 +69,9 @@ cax_nosa = rcax_hli("NOSA", qlist = list(limit = 10000))
 
 npt_cax_nosa = cax_nosa %>%
   filter(submitagency == "NPT")
+
+# datasets available in CAX
+cax_datasets = rcax_datasets()
 
 # load populations table from CAX
 pop_df = rcax_table_query(tablename = "Populations")
@@ -121,7 +122,6 @@ age_p_for_cax = age_p_df %>%
     names_glue = "{param}{stat}"
   ) %>%
   ungroup()
-  
 
 #----------------------------------------------------------------
 # prep SnakeRiverFishStatus results to compare and upload to NOSA
@@ -307,11 +307,49 @@ srfs_to_cax = pop_esc_df %>%
          HLI                = "NOSA",
          NullRecord         = "No",
          DataStatus         = "Draft",
+         # do IndicatorLocation, MetricLocation, MeasureLocation need to be changed to something other than CDMS?
+         IndicatorLocation  = "npt-cdms.nezperce.org",
+         MetricLocation     = "npt-cdms.nezperce.org",
+         MeasureLocation    = "npt-cdms.nezperce.org",
          OtherDataSources   = "IDFG, ODFW, WDFW, Biomark, QCI, SBT, CTUIR",
-         Publish            = "Yes")
+         Publish            = "Yes") %>%
+  arrange(CommonName, CommonPopName, SpawningYear)
 
 # write to excel, if needed
 write_xlsx(srfs_to_cax, path = paste0("output/SnakeRiverFishStatus_Results_4_CAX_NOSA_", Sys.Date(), ".xlsx"))
+
+#----------------------------------------------------------------------
+# compare prepped SRFS results to existing CAX records submitted by NPT
+comp_df = srfs_to_cax %>%
+  select(CommonName,
+         CommonPopName,
+         SpawningYear,
+         MetaComments,
+         NOSAIJ) %>%
+  rename(NOSAIJ_SRFS = NOSAIJ) %>%
+  full_join(
+    npt_cax_nosa %>%
+      select(CommonName = commonname,
+             CommonPopName = commonpopname,
+             SpawningYear = spawningyear,
+             MetaComments = metacomments,
+             NOSAIJ = nosaij) %>%
+      rename(NOSAIJ_CAX = NOSAIJ),
+    by = c("CommonName", "CommonPopName", "SpawningYear", "MetaComments")
+  ) %>%
+  mutate(
+    source = case_when(
+      !is.na(NOSAIJ_SRFS) & !is.na(NOSAIJ_CAX) ~ "BOTH",
+      !is.na(NOSAIJ_SRFS) &  is.na(NOSAIJ_CAX) ~ "SRFS_ONLY",
+       is.na(NOSAIJ_SRFS) & !is.na(NOSAIJ_CAX) ~ "CAX_ONLY",
+      TRUE ~ NA_character_
+    )
+  )
+
+# tentative records to delete in CAX; these records exist in CAX but I no longer report from SRFS
+records_to_delete = comp_df %>%
+  filter(MetaComments == "STADEM and DABOM", 
+         source       == "CAX_ONLY")
 
 ### END SCRIPT
 
