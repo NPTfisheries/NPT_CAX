@@ -5,7 +5,7 @@
 #   IPTDS-based escapement estimates versus expanded spawner abundance estimates (accounting for unmonitored habitat). 
 # 
 # Created Date: January 23, 2026
-#   Last Modified: February 17, 2026
+#   Last Modified: February 18, 2026
 #
 # Notes:
 
@@ -101,7 +101,7 @@ sr_pop_df = pop_df %>%
 # prep age_p_df to join to abundance results and formatted for CAX
 age_p_for_cax = age_p_df %>%
   select(species:upper95ci) %>%
-  mutate(across(c(median, lower95ci, upper95ci), ~ round(.x, 8)),
+  mutate(across(c(median, lower95ci, upper95ci), ~ signif(round(.x, 8), 8)),
          param = str_remove(param, "^p_"),
          param = str_replace(param, "age_", "Age")) %>%
   group_by(species, spawn_yr, popid) %>%
@@ -234,6 +234,8 @@ srfs_to_cax = pop_esc_df %>%
       TRUE ~ NA_character_
     )
   ) %>%
+  # as default, set BestValue to be "Yes" for "Same" estimates
+  mutate(BestValue = if_else(PopFit == "Same", "Yes", "No")) %>%
   select(-p_qrf, -site_note, -qrf_note) %>%
   # add protocol fields
   mutate(
@@ -315,8 +317,29 @@ srfs_to_cax = pop_esc_df %>%
          Publish            = "Yes") %>%
   arrange(CommonName, CommonPopName, SpawningYear)
 
+#----------------------------------------
+# some final modifications based on QA/QC
+srfs_to_cax_qc = srfs_to_cax %>%
+  # in any case where the "Portion" estimate is 0, I don't want to report the expanded estimate.
+  group_by(CommonName, CommonPopName, SpawningYear) %>%
+  mutate(portion0 = any(PopFit == "Portion" & NOSAIJ == 0, na.rm = TRUE)) %>%
+  filter(!(portion0 & PopFit == "Same")) %>% # if group Portion estimate is 0, remove the Same record
+  mutate(BestValue = if_else(PopFit == "Portion" & NOSAIJ == 0, "Yes", BestValue)) %>% # and mark the Portion estimate as BestValue
+  select(-portion0) %>%
+  ungroup() %>%
+  # add a comment for SF Clearwater populations using SC1 estimate
+  mutate(
+    Comments = if_else(
+      CommonPopName %in% c("CRSFC-s", "SCUMA") & pop_sites == "SC1",
+      paste0("Estimate reflects escapement past SC1 which occurs downstream of the population boundary. ", Comments),
+      Comments
+    )
+  )
+
+# NOTE: Need to remove pop_sites before final export
+
 # write to excel, if needed
-write_xlsx(srfs_to_cax, path = paste0("output/SnakeRiverFishStatus_Results_4_CAX_NOSA_", Sys.Date(), ".xlsx"))
+write_xlsx(srfs_to_cax_qc, path = paste0("output/SnakeRiverFishStatus_Results_4_CAX_NOSA_", Sys.Date(), ".xlsx"))
 
 #----------------------------------------------------------------------
 # compare prepped SRFS results to existing CAX records submitted by NPT
